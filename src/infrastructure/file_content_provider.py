@@ -14,6 +14,8 @@ class FileContentProvider(IContentProvider):
         self.template_file = os.path.join(self.data_dir, 'Template.txt')
         self._pending_links_data = None
         self._current_link_obj = None
+        self._pending_texts_data = None
+        self._current_text_obj = None
 
     def get_post_content(self) -> Tuple[str, Optional[str], Optional[dict]]:
         # 1. Pop from links.json
@@ -81,12 +83,21 @@ class FileContentProvider(IContentProvider):
                     # Find the text object with matching id
                     for text_obj in texts_data:
                         if text_obj.get("id") == post_id:
+                            # Check if this text was already published
+                            last_pub = text_obj.get("last_published", "")
+                            if last_pub:
+                                print(f"Text '{post_id}' was already published on {last_pub}. Skipping.")
+                                print("To re-publish, set last_published to \"\" in texts.json.")
+                                return "No valid content available", None, None
                             body_text = text_obj.get("body", body_text)
                             # Convert any <br> tags from JSON into real newlines for LinkedIn
                             body_text = body_text.replace("<br>", "\n")
                             # Extract and format the hashtags array
                             hashtags_list = text_obj.get("hashtags", [])
                             hashtags_str = " ".join(hashtags_list)
+                            # Store references for mark_as_published
+                            self._pending_texts_data = texts_data
+                            self._current_text_obj = text_obj
                             break
                 except json.JSONDecodeError:
                     pass
@@ -133,9 +144,18 @@ class FileContentProvider(IContentProvider):
         return final_text, image_path, metadata
 
     def mark_as_published(self) -> None:
-        if self._pending_links_data is not None and getattr(self, '_current_link_obj', None) is not None:
+        # Mark the link as published
+        if self._pending_links_data is not None and self._current_link_obj is not None:
             self._current_link_obj["published"] = True
             with open(self.links_file, 'w', encoding='utf-8') as f:
                 json.dump(self._pending_links_data, f, indent=2)
             self._pending_links_data = None
             self._current_link_obj = None
+
+        # Stamp the text with the current datetime
+        if self._pending_texts_data is not None and self._current_text_obj is not None:
+            self._current_text_obj["last_published"] = datetime.now().isoformat()
+            with open(self.texts_file, 'w', encoding='utf-8') as f:
+                json.dump(self._pending_texts_data, f, indent=4, ensure_ascii=False)
+            self._pending_texts_data = None
+            self._current_text_obj = None
