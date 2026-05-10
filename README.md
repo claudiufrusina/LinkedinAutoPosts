@@ -1,6 +1,33 @@
 # 🚀 LinkedIn Auto Poster
 
-Welcome to the **LinkedIn Auto Poster**! This project is an automated, scheduled Python application designed to dynamically compose and publish posts (text + images) to your LinkedIn profile. It follows a clean, SOLID architecture for maximum scalability.
+Welcome to the **LinkedIn Auto Poster**! This project is an automated, scheduled Python application designed to dynamically compose and publish posts (text + images + @mentions) to your LinkedIn profile. It follows a clean, SOLID architecture for maximum scalability.
+
+---
+
+## 📁 Project Structure
+
+```
+LinkedinAutoPosts/
+├── main.py                  # Entry point & scheduler
+├── run_poster.bat           # One-click Windows launcher
+├── requirements.txt         # Python dependencies
+├── .env                     # Environment variables (secrets)
+├── data/
+│   ├── links.json           # Post queue (links, images, mentions)
+│   ├── texts.json           # Content database (body text, hashtags)
+│   ├── Template.txt         # Post layout template
+│   └── images/              # Image assets for posts
+└── src/
+    ├── config.py             # Reads .env settings
+    ├── core/
+    │   └── post_service.py   # Orchestrates the full pipeline
+    ├── infrastructure/
+    │   ├── file_content_provider.py  # Loads & assembles content
+    │   └── linkedin_client.py        # LinkedIn API integration
+    └── interfaces/
+        ├── content_provider.py       # IContentProvider abstraction
+        └── social_client.py          # ISocialClient abstraction
+```
 
 ---
 
@@ -9,39 +36,180 @@ Welcome to the **LinkedIn Auto Poster**! This project is an automated, scheduled
 The application uses an intelligent queuing system to build and publish your posts. Here is exactly what happens behind the scenes when a scheduled post triggers:
 
 ### 1. 📋 The Queue (`data/links.json`)
-Think of `links.json` as your "To-Do" list. When it's time to post, the script looks at the very first object in this file:
-- ⏳ **Expiration Check:** It checks the `expiration_date`. If that date is in the past, it discards the link and checks the next one.
-- 🎯 **Extraction:** Once it finds a valid link, it extracts the `id` (e.g., `"post_2"`), the `url`, and the `image` filename.
-- 🗑️ **Deletion:** It immediately deletes that object from `links.json` and saves the file. This ensures you **never accidentally post the same content twice**.
+Think of `links.json` as your "To-Do" list. When it's time to post, the script scans this file from top to bottom looking for the next valid entry:
+- ✅ **Published Check:** It skips any entry where `"published": true`.
+- ⏳ **Expiration Check:** It checks the `expiration_date`. If that date is in the past, it automatically marks the entry as published and moves on.
+- 🎯 **Extraction:** Once it finds a valid link, it extracts the `id` (e.g., `"post_1"`), the `url`, the `title`, the `image` filename, and optional `company_name` / `company_urn` for @mentions.
+- 🔒 **Safe Marking:** After a successful publish, it sets `"published": true` on the link. Your queue file is **never destructively modified** — only the flag changes.
+
+```json
+[
+  {
+    "id": "post_1",
+    "url": "https://example.com/article",
+    "title": "My Amazing Article",
+    "image": "article_banner.png",
+    "expiration_date": "2026-06-01T00:00:00",
+    "company_name": "Acme Corp",
+    "company_urn": "urn:li:organization:12345678",
+    "published": false
+  }
+]
+```
 
 ### 2. 🗄️ The Content Database (`data/texts.json`)
-Next, the script opens `texts.json`, which acts as your permanent database. 
-- 🔍 It scans through all the objects until it finds the one where the `"id"` perfectly matches the ID it just pulled from the link (e.g., `"post_2"`). 
-- ✍️ It then extracts the `"body"` text from that object.
+Next, the script opens `texts.json`, which acts as your permanent content database.
+- 🔍 It scans through all the objects until it finds the one where the `"id"` perfectly matches the ID it just pulled from the link (e.g., `"post_1"`).
+- 🛡️ **Duplicate Prevention:** It checks the `"last_published"` attribute. If it contains a date, the post has already been published and will be **skipped automatically** — no duplicate posts, ever.
+- ✍️ It extracts the `"body"` text and the `"hashtags"` array from that object.
+- 📝 Any `<br>` tags in the body are converted to real newlines for LinkedIn formatting.
+
+```json
+[
+    {
+        "id": "post_1",
+        "body": "Excited to share our latest innovation!<br>Check it out 👇",
+        "hashtags": [
+            "#job",
+            "#hiring",
+            "#technology"
+        ],
+        "last_published": ""
+    }
+]
+```
+
+> 💡 **Re-publishing a post:** To publish the same text again, simply set `"last_published"` back to `""` (empty string) in `texts.json`. This is the **only** way to re-enable a previously published text.
 
 ### 3. 🧩 The Assembler (`data/Template.txt`)
-Now the script has a raw text body and a URL, but it needs to format them. 
-- 📄 It opens your `Template.txt` file and looks for the special `{body}` and `{link}` tags.
-- 💉 It dynamically injects the text and the URL into those exact spots. 
-- ✨ Any emojis, spacing, or hashtags (like `#AutoGeneratedByLinkedinBot`) included in your template will be automatically applied to the final message!
+Now the script has a raw text body, a URL, a title, and hashtags — but it needs to format them.
+- 📄 It opens your `Template.txt` file and looks for the special placeholder tags.
+- 💉 It dynamically injects each piece of content into the matching placeholders.
+- ✨ Any emojis, spacing, or fixed tags in your template are automatically applied to the final message!
 
-### 4. 🖼️ The Image Upload Process
-The script looks at the `"image"` attribute from step 1 (e.g., `"update.png"`).
+**Available placeholders:**
+
+| Placeholder | Source | Description |
+|---|---|---|
+| `{title}` | `links.json` → `title` | Post headline |
+| `{body}` | `texts.json` → `body` | Main post text |
+| `{link}` | `links.json` → `url` | URL to share |
+| `{hashtags}` | `texts.json` → `hashtags[]` | Space-separated hashtags |
+| `@{Company}` | `links.json` → `company_name` | Tagged company name (becomes a clickable @mention) |
+
+**Example template:**
+```
+🚀{title}
+
+{body}
+
+@{Company}
+👉 Find out more here: {link}
+
+#AutoGeneratedByMyLinkedinBot
+{hashtags}
+```
+
+### 4. 🏷️ Company @Mentions
+If a link entry includes both `company_name` and `company_urn`, the script will:
+1. 🔎 Locate the company name inside the final assembled text.
+2. 📐 Calculate its exact character position and length.
+3. 🤝 Attach LinkedIn's `CompanyAttributedEntity` metadata to the API payload.
+4. ✨ The company name becomes a **clickable @mention** in the published post!
+
+> 💡 **Tip:** Leave `company_name` and `company_urn` empty if you don't need a mention for that post.
+
+### 5. 🖼️ The Image Upload Process
+The script looks at the `"image"` attribute from the link entry (e.g., `"article_banner.png"`).
 1. 📁 It searches inside your `data/images/` folder for a file with that exact name.
 2. 🤝 If found, it sends a secure "handshake" request to the LinkedIn API asking for permission to upload an image.
 3. 🔗 LinkedIn responds with a temporary, secure upload URL.
-4. ☁️ The script uploads the actual binary file of `"update.png"` to that URL.
+4. ☁️ The script uploads the actual binary file to that URL.
 5. 🔑 LinkedIn processes the image and gives the script an `Asset URN` (a unique ID for that specific uploaded image).
-
-### 5. 🚀 Publishing to LinkedIn
-Finally, the script packages the formatted text (from step 3) and the `Asset URN` (from step 4) into one final JSON payload and sends it to the LinkedIn API. 
-🎉 The post goes live instantly with the text, the URL, and the attached image! 
 
 > 💡 **Note:** If you didn't specify an image, or if the image file was missing from the folder, the script safely falls back to creating a text-only post.
 
+### 6. 🚀 Publishing to LinkedIn
+Finally, the script packages the formatted text (from step 3), the mention metadata (from step 4), and the `Asset URN` (from step 5) into one final JSON payload and sends it to the LinkedIn API.
+🎉 The post goes live instantly with the text, the URL, the @mention, and the attached image!
+
+After a successful publish:
+- ✅ The link entry in `links.json` is marked with `"published": true`
+- 📅 The text entry in `texts.json` gets stamped with the current date/time in `"last_published"`
+
 ---
 
-## 🛠️ Usage
-1. Set your `LINKEDIN_ACCESS_TOKEN` and `LINKEDIN_PERSON_URN` in your `.env` file.
-2. Configure your `POSTING_TIMES` in `.env` (e.g., `10:00,14:30`).
-3. Run `run_poster.bat` to start the scheduler in the background!
+## 🔶 Dry Run Mode
+
+Test your entire pipeline **without actually publishing** to LinkedIn. In dry-run mode the script assembles the full post, prints it to the console, and then exits — nothing is sent to the API and no files are modified.
+
+**Enable it in one of two ways:**
+
+| Method | How |
+|---|---|
+| `.env` variable | Add `DRY_RUN=true` to your `.env` file |
+| Command-line flag | Run with `python main.py --dry-run` |
+
+---
+
+## 🛠️ Setup & Usage
+
+### 1. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configure `.env`
+Create a `.env` file in the project root with the following variables:
+
+```env
+# LinkedIn App Credentials
+LINKEDIN_CLIENT_ID=your_client_id
+LINKEDIN_CLIENT_SECRET=your_client_secret
+LINKEDIN_ACCESS_TOKEN=your_access_token
+LINKEDIN_PERSON_URN=urn:li:person:your_person_id
+
+# Posting Schedule (comma-separated 24h times)
+POSTING_TIMES=10:00,14:30
+
+# Optional settings
+MAX_POSTS_PER_DAY=2
+DRY_RUN=false
+```
+
+### 3. Add Your Content
+1. **Add a link** to `data/links.json` with a unique `id`, `url`, `title`, and optional `image` / `company` fields.
+2. **Add matching text** to `data/texts.json` with the same `id`, your `body` content, and `hashtags`.
+3. **Drop images** into `data/images/` if your posts include visuals.
+
+### 4. Launch!
+```bash
+# Windows — double-click or run:
+run_poster.bat
+
+# Or directly:
+python main.py
+
+# Test without publishing:
+python main.py --dry-run
+```
+
+The scheduler will execute an initial run on startup, then continue running and trigger at your configured `POSTING_TIMES` every day.
+
+---
+
+## 📊 Content Lifecycle at a Glance
+
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌────────────┐
+│  links.json │────▸│  texts.json  │────▸│ Template.txt │────▸│  LinkedIn  │
+│ published:  │     │last_published│     │  {body}      │     │   API 🚀   │
+│   false     │     │    ""        │     │  {link} ...  │     │            │
+└─────────────┘     └──────────────┘     └──────────────┘     └────────────┘
+       │                    │                                        │
+       ▼                    ▼                                        │
+  published: true    last_published:                                 │
+                     "2026-05-10T..."  ◀─────────────────────────────┘
+```
+
+> 🔁 **Want to re-publish?** Set `"last_published": ""` in `texts.json` and `"published": false` in `links.json`.
