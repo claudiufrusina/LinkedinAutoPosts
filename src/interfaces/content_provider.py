@@ -1,14 +1,15 @@
 from typing import Protocol, Optional, Tuple
 
 class IContentProvider(Protocol):
-    def get_post_content(self) -> Tuple[str, Optional[str]]:
+    def get_post_content(self) -> Tuple[str, Optional[str], Optional[dict]]:
         """
         Retrieves the finalized content for the next post.
         
         Returns:
-            Tuple[str, Optional[str]]: 
+            Tuple[str, Optional[str], Optional[dict]]: 
                 - The complete text/caption for the post.
                 - The absolute path to an image file, or None if it's a text-only post.
+                - An optional metadata dictionary (e.g. company mentions for tagging).
         """
         ...
 

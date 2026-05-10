@@ -54,7 +54,26 @@ class LinkedInClient(ISocialClient):
         print(f"Error uploading image: {response.status_code} - {response.text}")
         return False
 
-    def _create_post(self, text: str, asset_urn: str = None) -> bool:
+    def _build_attributes(self, metadata: dict) -> list:
+        """
+        Builds the LinkedIn attributes array for @mentions from metadata.
+        Each mention needs: start index, length, and the company URN.
+        """
+        attributes = []
+        mentions = metadata.get("mentions", [])
+        for mention in mentions:
+            attributes.append({
+                "length": mention["length"],
+                "start": mention["start"],
+                "value": {
+                    "com.linkedin.common.CompanyAttributedEntity": {
+                        "company": mention["company_urn"]
+                    }
+                }
+            })
+        return attributes
+
+    def _create_post(self, text: str, asset_urn: str = None, metadata: dict = None) -> bool:
         if not self.access_token or not self.person_urn:
             print("Missing LinkedIn credentials.")
             return False
@@ -68,14 +87,22 @@ class LinkedInClient(ISocialClient):
                 "media": asset_urn
             }]
 
+        # Build the shareCommentary with optional attributes for @mentions
+        share_commentary = {
+            "text": text
+        }
+        if metadata and metadata.get("mentions"):
+            attributes = self._build_attributes(metadata)
+            if attributes:
+                share_commentary["attributes"] = attributes
+                print(f"Adding {len(attributes)} mention(s) to the post.")
+
         payload = {
             "author": self.person_urn,
             "lifecycleState": "PUBLISHED",
             "specificContent": {
                 "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {
-                        "text": text
-                    },
+                    "shareCommentary": share_commentary,
                     "shareMediaCategory": "IMAGE" if asset_urn else "NONE"
                 }
             },
@@ -94,7 +121,7 @@ class LinkedInClient(ISocialClient):
         print(f"Error creating post: {response.status_code} - {response.text}")
         return False
 
-    def publish_post(self, text: str, image_path: Optional[str] = None) -> bool:
+    def publish_post(self, text: str, image_path: Optional[str] = None, metadata: Optional[dict] = None) -> bool:
         asset_urn = None
         
         if image_path:
@@ -110,4 +137,4 @@ class LinkedInClient(ISocialClient):
                     print("Failed to upload image. Posting without image.")
                     asset_urn = None
         
-        return self._create_post(text, asset_urn)
+        return self._create_post(text, asset_urn, metadata)

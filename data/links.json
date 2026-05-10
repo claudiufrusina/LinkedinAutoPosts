@@ -1,9 +1,12 @@
 [
   {
     "id": "post_1",
-    "url": "https://example.com/insight",
-    "image": "test_image.jpg",
-    "expiration_date": "2026-06-01T00:00:00",
-    "published": true
+    "url": "REPLACE_THIS_WITH_URL",
+    "title": "REPLACE_THIS_WITH_TITLE",
+    "image": "REPLACE_THIS_WITH_IMAGE_NAME",
+    "expiration_date": "REPLACE_THIS_WITH_EXPIRATION_DATE",
+    "company_name": "REPLACE_THIS_WITH_COMPANY_NAME",
+    "company_urn": "urn:li:organization:REPLACE_THIS_WITH_COMPANY_URN",
+    "published": false
   }
 ]

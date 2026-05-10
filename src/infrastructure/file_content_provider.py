@@ -15,10 +15,10 @@ class FileContentProvider(IContentProvider):
         self._pending_links_data = None
         self._current_link_obj = None
 
-    def get_post_content(self) -> Tuple[str, Optional[str]]:
+    def get_post_content(self) -> Tuple[str, Optional[str], Optional[dict]]:
         # 1. Pop from links.json
         if not os.path.exists(self.links_file):
-            return "No content available", None
+            return "No content available", None, None
             
         with open(self.links_file, 'r', encoding='utf-8') as f:
             try:
@@ -27,7 +27,7 @@ class FileContentProvider(IContentProvider):
                 links_data = []
                 
         if not links_data:
-            return "No content available", None
+            return "No content available", None, None
             
         link_obj = None
         now = datetime.now()
@@ -62,14 +62,18 @@ class FileContentProvider(IContentProvider):
                 with open(self.links_file, 'w', encoding='utf-8') as f:
                     json.dump(self._pending_links_data, f, indent=2)
                 self._pending_links_data = None
-            return "No valid content available", None
+            return "No valid content available", None, None
             
         post_id = link_obj.get("id")
         url = link_obj.get("url", "")
+        title = link_obj.get("title", "")
         image_name = link_obj.get("image")
+        company_name = link_obj.get("company_name")
+        company_urn = link_obj.get("company_urn")
         
         # 2. Match by ID in texts.json
         body_text = "Check out our latest update!"
+        hashtags_str = ""
         if os.path.exists(self.texts_file):
             with open(self.texts_file, 'r', encoding='utf-8') as f:
                 try:
@@ -78,6 +82,11 @@ class FileContentProvider(IContentProvider):
                     for text_obj in texts_data:
                         if text_obj.get("id") == post_id:
                             body_text = text_obj.get("body", body_text)
+                            # Convert any <br> tags from JSON into real newlines for LinkedIn
+                            body_text = body_text.replace("<br>", "\n")
+                            # Extract and format the hashtags array
+                            hashtags_list = text_obj.get("hashtags", [])
+                            hashtags_str = " ".join(hashtags_list)
                             break
                 except json.JSONDecodeError:
                     pass
@@ -89,7 +98,9 @@ class FileContentProvider(IContentProvider):
                 post_template = f.read()
 
         # Safely handle the formatting so if the text contains braces it doesn't crash
-        final_text = post_template.replace("{body}", body_text).replace("{link}", url)
+        # Replace @{Company} with the company name from links.json (or remove it if not provided)
+        company_display = company_name if company_name else ""
+        final_text = post_template.replace("{title}", title).replace("{body}", body_text).replace("{link}", url).replace("{hashtags}", hashtags_str).replace("@{Company}", company_display)
             
         # 4. Resolve Image
         image_path = None
@@ -99,8 +110,27 @@ class FileContentProvider(IContentProvider):
             full_image_path = os.path.join(self.images_dir, base_image_name)
             if os.path.exists(full_image_path):
                 image_path = full_image_path
+
+        # 5. Build mention metadata
+        # After all replacements, find the company name position in the final text
+        metadata = None
+        if company_name and company_urn:
+            mention_start = final_text.find(company_name)
+            if mention_start != -1:
+                metadata = {
+                    "mentions": [
+                        {
+                            "start": mention_start,
+                            "length": len(company_name),
+                            "company_urn": company_urn
+                        }
+                    ]
+                }
+                print(f"Mention detected: '{company_name}' at position {mention_start} (URN: {company_urn})")
+            else:
+                print(f"Warning: '{company_name}' not found in the post text. No mention will be tagged.")
                 
-        return final_text, image_path
+        return final_text, image_path, metadata
 
     def mark_as_published(self) -> None:
         if self._pending_links_data is not None and getattr(self, '_current_link_obj', None) is not None:
